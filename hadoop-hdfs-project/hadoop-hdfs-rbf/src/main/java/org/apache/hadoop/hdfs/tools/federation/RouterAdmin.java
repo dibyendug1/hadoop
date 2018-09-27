@@ -19,6 +19,7 @@ package org.apache.hadoop.hdfs.tools.federation;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -123,9 +124,10 @@ public class RouterAdmin extends Configured implements Tool {
           + "[-readonly] [-order HASH|LOCAL|RANDOM|HASH_ALL] "
           + "-owner <owner> -group <group> -mode <mode>]";
     } else if (cmd.equals("-update")) {
-      return "\t[-update <source> <nameservice1, nameservice2, ...> "
-          + "<destination> "
-          + "[-readonly] [-order HASH|LOCAL|RANDOM|HASH_ALL] "
+      return "\t[-update <source> [-destination <from nameservice>"
+          + "<from destination> <to nameservice> <to destination>]"
+          + "[-addDestination <nameservice> <destination>] [-readonly]"
+          + "[-order HASH|LOCAL|RANDOM|HASH_ALL] "
           + "-owner <owner> -group <group> -mode <mode>]";
     } else if (cmd.equals("-rm")) {
       return "\t[-rm <source>]";
@@ -203,7 +205,7 @@ public class RouterAdmin extends Configured implements Tool {
         return exitCode;
       }
     } else if ("-update".equals(cmd)) {
-      if (argv.length < 4) {
+      if (argv.length < 3) {
         System.err.println("Not enough parameters specified for cmd " + cmd);
         printUsage(cmd);
         return exitCode;
@@ -499,8 +501,13 @@ public class RouterAdmin extends Configured implements Tool {
   public boolean updateMount(String[] parameters, int i) throws IOException {
     // Mandatory parameters
     String mount = parameters[i++];
-    String[] nss = parameters[i++].split(",");
-    String dest = parameters[i++];
+    String oldNsId = null;
+    String oldPath = null;
+    String newNsId = null;
+    String newPath = null;
+    String[] nss = null;
+    String dest = null;
+
 
     // Optional parameters
     boolean readOnly = false;
@@ -509,7 +516,15 @@ public class RouterAdmin extends Configured implements Tool {
     FsPermission mode = null;
     DestinationOrder order = null;
     while (i < parameters.length) {
-      if (parameters[i].equals("-readonly")) {
+      if(parameters[i].equals("-destination")) {
+        oldNsId = parameters[++i];
+        oldPath = parameters[++i];
+        newNsId = parameters[++i];
+        newPath = parameters[++i];
+      } else if(parameters[i].equals("-addDestination")) {
+        nss = parameters[++i].split(",");
+        dest = parameters[++i];
+      } else if (parameters[i].equals("-readonly")) {
         readOnly = true;
       } else if (parameters[i].equals("-order")) {
         i++;
@@ -536,15 +551,19 @@ public class RouterAdmin extends Configured implements Tool {
       i++;
     }
 
-    return updateMount(mount, nss, dest, readOnly, order,
-        new ACLEntity(owner, group, mode));
+    return updateMount(mount, oldNsId, oldPath, newNsId, newPath, nss, dest,
+        readOnly, order, new ACLEntity(owner, group, mode));
   }
 
   /**
    * Update a mount table entry.
    *
    * @param mount Mount point.
-   * @param nss Nameservices where this is mounted to.
+   * @param oldNsId Old namespace.
+   * @param oldDest Old destination.
+   * @param newNsId New namespace.
+   * @param newDest New destination.
+   * @param nss Namespaces where this is mounted to.
    * @param dest Destination path.
    * @param readonly If the mount point is read only.
    * @param order Order of the destination locations.
@@ -552,40 +571,69 @@ public class RouterAdmin extends Configured implements Tool {
    * @return If the mount point was updated.
    * @throws IOException Error updating the mount point.
    */
-  public boolean updateMount(String mount, String[] nss, String dest,
+  public boolean updateMount(String mount, String oldNsId, String oldDest,
+      String newNsId, String newDest, String[] nss, String dest,
       boolean readonly, DestinationOrder order, ACLEntity aclInfo)
       throws IOException {
     mount = normalizeFileSystemPath(mount);
+
     MountTableManager mountTable = client.getMountTableManager();
-
-    // Create a new entry
-    Map<String, String> destMap = new LinkedHashMap<>();
-    for (String ns : nss) {
-      destMap.put(ns, dest);
-    }
-    MountTable newEntry = MountTable.newInstance(mount, destMap);
-
-    newEntry.setReadOnly(readonly);
-
-    if (order != null) {
-      newEntry.setDestOrder(order);
+    GetMountTableEntriesRequest getRequest =
+        GetMountTableEntriesRequest.newInstance(mount);
+    GetMountTableEntriesResponse getResponse =
+        mountTable.getMountTableEntries(getRequest);
+    List<MountTable> results = getResponse.getEntries();
+    MountTable existingEntry = null;
+    for (MountTable result : results) {
+      if (mount.equals(result.getSourcePath())) {
+        existingEntry = result;
+      }
     }
 
-    // Update ACL info of mount table entry
-    if (aclInfo.getOwner() != null) {
-      newEntry.setOwnerName(aclInfo.getOwner());
-    }
+    if (existingEntry != null) {
+      // Update the existing entry if it exists
+      if (oldNsId != null && oldDest != null && newNsId != null
+          && newDest != null) {
+        if(!existingEntry.updateDestination(oldNsId, oldDest, newNsId, newDest)) {
+          System.err.println(
+              "Cannot update destination from " + oldNsId + " " + oldDest
+                  + " to " + newNsId + " " + newDest);
+        }
+      }
+      if (nss != null && dest != null) {
+        for (String nsId : nss) {
+          if (!existingEntry.addDestination(nsId, dest)) {
+            System.err.println(
+                "Cannot add destination at " + nsId + " " + dest);
+          }
+        }
+      }
 
-    if (aclInfo.getGroup() != null) {
-      newEntry.setGroupName(aclInfo.getGroup());
-    }
+      if (readonly) {
+        existingEntry.setReadOnly(true);
+      }
+      if (order != null) {
+        existingEntry.setDestOrder(order);
+      }
 
-    if (aclInfo.getMode() != null) {
-      newEntry.setMode(aclInfo.getMode());
+      // Update ACL info of mount table entry
+      if (aclInfo.getOwner() != null) {
+        existingEntry.setOwnerName(aclInfo.getOwner());
+      }
+
+      if (aclInfo.getGroup() != null) {
+        existingEntry.setGroupName(aclInfo.getGroup());
+      }
+
+      if (aclInfo.getMode() != null) {
+        existingEntry.setMode(aclInfo.getMode());
+      }
+    } else {
+      throw new IOException(mount + " doesn't exist in mount table.");
     }
 
     UpdateMountTableEntryRequest updateRequest =
-        UpdateMountTableEntryRequest.newInstance(newEntry);
+        UpdateMountTableEntryRequest.newInstance(existingEntry);
     UpdateMountTableEntryResponse updateResponse =
         mountTable.updateMountTableEntry(updateRequest);
     boolean updated = updateResponse.getStatus();

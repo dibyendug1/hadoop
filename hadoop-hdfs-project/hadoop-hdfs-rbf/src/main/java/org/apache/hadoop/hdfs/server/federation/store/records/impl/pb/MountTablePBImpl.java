@@ -20,6 +20,7 @@ package org.apache.hadoop.hdfs.server.federation.store.records.impl.pb;
 import java.io.IOException;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.federation.protocol.proto.HdfsServerFederationProtos.MountTableRecordProto;
@@ -142,6 +143,40 @@ public class MountTablePBImpl extends MountTable implements PBRecord {
     itemBuilder.setPath(path);
     RemoteLocationProto item = itemBuilder.build();
     builder.addDestinations(item);
+    return true;
+  }
+
+  @Override
+  public boolean updateDestination(String oldNsId, String oldPath,
+      String newNsId, String newPath) {
+    // Check if the location is already there
+    List<RemoteLocation> dests = getDestinations();
+    for (RemoteLocation dest : dests) {
+      if (!(dest.getNameserviceId().equals(oldNsId) && dest.getDest()
+          .equals(oldPath))) {
+        return false;
+      }
+    }
+
+    Builder builder = this.translator.getBuilder();
+    List<RemoteLocationProto> destProto = builder.getDestinationsList();
+    MountTableRecordProto.Builder newRecord =
+        MountTableRecordProto.newBuilder();
+    for (RemoteLocationProto dest : destProto) {
+      if (dest.getNameserviceId().equals(oldNsId) && dest.getPath()
+          .equals(oldPath)) {
+        RemoteLocationProto.Builder destBulder = dest.toBuilder().clear();
+        destBulder.setNameserviceId(newNsId);
+        destBulder.setPath(newPath);
+        newRecord.addDestinations(destBulder);
+      } else {
+        newRecord.addDestinations(dest);
+      }
+
+    }
+    builder.clearDestinations();
+    builder.addAllDestinations(newRecord.getDestinationsList());
+
     return true;
   }
 

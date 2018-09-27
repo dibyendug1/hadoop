@@ -197,6 +197,12 @@ public abstract class MountTable extends BaseRecord {
   public abstract boolean addDestination(String nsId, String path);
 
   /**
+   * Update a existing destination of this mount table entry.
+   */
+  public abstract boolean updateDestination(String oldNsId, String oldPath,
+      String newNsId, String newPath);
+
+  /**
    * Check if the entry is read only.
    *
    * @return If the entry is read only.
