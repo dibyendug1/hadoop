@@ -19,11 +19,16 @@ package org.apache.hadoop.hdfs.server.federation.router;
 
 import java.net.InetSocketAddress;
 
+import com.sun.xml.internal.rngom.digested.DDataPattern;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
 import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.client.HdfsClientConfigKeys;
 import org.apache.hadoop.hdfs.server.common.JspHelper;
+import org.apache.hadoop.hdfs.server.federation.router.namespace.NamespaceAdmin;
 import org.apache.hadoop.hdfs.server.namenode.NameNodeHttpServer;
+import org.apache.hadoop.hdfs.web.resources.Param;
+import org.apache.hadoop.hdfs.web.resources.UserParam;
 import org.apache.hadoop.http.HttpServer2;
 import org.apache.hadoop.service.AbstractService;
 
@@ -102,7 +107,27 @@ public class RouterHttpServer extends AbstractService {
       this.httpAddress = new InetSocketAddress(this.httpAddress.getHostName(),
           listenAddress.getPort());
     }
+    initNamespaceManager();
     super.serviceStart();
+  }
+
+  private void initNamespaceManager() {
+    boolean isNamespaceManagerEnabled = conf.getBoolean();
+    if (isNamespaceManagerEnabled) {
+      LOG.info("Router Usernamespace Manager is enabled.");
+      // Set user pattern
+      UserParam.setUserPattern(
+          conf.get(HdfsClientConfigKeys.DFS_WEBHDFS_USER_PATTERN_KEY,
+              HdfsClientConfigKeys.DFS_WEBHDFS_USER_PATTERN_DEFAULT));
+
+      String pathSpec = "namespacenamager/";
+      // add namaspace manager package
+      httpServer.addJerseyResourcePackage(
+          NamespaceAdmin.class.getPackage().getName() + ";" + Param.class
+              .getPackage().getName(), pathSpec);
+      httpServer.setAttribute(UNS.class.getSimpleName(), new UNSImpl(this.conf));
+
+    }
   }
 
   @Override
